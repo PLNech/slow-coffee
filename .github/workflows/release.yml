@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build sdist + wheel
+        run: |
+          pip install build
+          python -m build
+      - name: Build .deb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y devscripts debhelper dh-python \
+            pybuild-plugin-pyproject python3-all python3-setuptools
+          dpkg-buildpackage -us -uc -b
+          cp ../slow-coffee_*.deb dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: dist/*
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: artifacts
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Configure a "pypi" environment + Trusted Publisher on PyPI (no token needed).
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: artifacts
+          path: dist
+      - name: Drop the .deb (PyPI takes only wheels/sdists)
+        run: rm -f dist/*.deb
+      - uses: pypa/gh-action-pypi-publish@release/v1

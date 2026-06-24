@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  smoke:
+    name: Install + CLI smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install runtime GIR deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 \
+            gir1.2-ayatanaappindicator3-0.1
+      - run: pip install --break-system-packages .
+      - run: slow-coffee --version
+      - run: slow-coffee --help
+      - name: Desktop self-install round-trips
+        run: |
+          slow-coffee --install-desktop
+          test -f "$HOME/.local/share/applications/slow-coffee.desktop"
+          slow-coffee --uninstall-desktop
+
+  deb:
+    name: Build .deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packaging deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y devscripts debhelper dh-python \
+            pybuild-plugin-pyproject python3-all python3-setuptools
+      - run: dpkg-buildpackage -us -uc -b
+      - name: Collect .deb
+        run: mkdir -p deb && cp ../slow-coffee_*.deb deb/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: deb/*.deb
