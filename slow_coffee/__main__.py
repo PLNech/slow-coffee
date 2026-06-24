@@ -8,9 +8,11 @@ from . import __version__
 
 
 def _run_indicator(start_active, minutes):
-    # imported lazily so --install-desktop / --version work without a display
-    from gi.repository import Gtk, GLib
+    # Import the indicator first: it pins gi.require_version("Gtk", "3.0") before
+    # anything pulls in gi.repository.Gtk (which would otherwise default to 4.0).
+    # Kept lazy so --install-desktop / --version work without a display.
     from .indicator import SlowCoffee
+    from gi.repository import Gtk, GLib
 
     app = SlowCoffee(start_active=start_active, minutes=minutes)
 
