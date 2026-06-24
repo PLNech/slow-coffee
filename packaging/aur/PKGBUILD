@@ -1,0 +1,28 @@
+# Maintainer: PLNech <1821404+PLNech@users.noreply.github.com>
+pkgname=slow-coffee
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="A take-your-time keep-awake tray indicator - on by default"
+arch=('any')
+url="https://github.com/PLNech/slow-coffee"
+license=('MIT')
+depends=('python' 'python-gobject' 'gtk3' 'libayatana-appindicator')
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/PLNech/slow-coffee/archive/refs/tags/v$pkgver.tar.gz")
+# Replace SKIP with the real checksum after tagging:  updpkgsums
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 data/slow-coffee.desktop \
+    "$pkgdir/usr/share/applications/slow-coffee.desktop"
+  install -Dm644 data/icons/slow-coffee.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/slow-coffee.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

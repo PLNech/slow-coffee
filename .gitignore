@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.whl
+
+# Debian build artifacts
+debian/.debhelper/
+debian/slow-coffee/
+debian/files
+debian/*.debhelper.log
+debian/*.substvars
+../slow-coffee_*.deb
+../slow-coffee_*.buildinfo
+../slow-coffee_*.changes
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

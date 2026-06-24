@@ -1,0 +1,251 @@
+"""The tray indicator and the idle-inhibition backends.
+
+Idle inhibition is requested over D-Bus, preferring the running session daemon
+and falling back to logind:
+
+    1. org.gnome.SessionManager.Inhibit   (GNOME; X11 verified, Wayland expected)
+    2. org.freedesktop.ScreenSaver.Inhibit (KDE / freedesktop)
+    3. systemd-inhibit --what=idle         (logind fallback for bare WMs)
+
+Default flag is *idle only* (8): the screen stays on, but closing the lid still
+suspends - safer for a laptop than blocking all sleep.
+
+This is an independent implementation; see the README's "Prior art" note.
+"""
+
+import os
+import subprocess
+from os.path import join, dirname, abspath, isdir
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("AyatanaAppIndicator3", "0.1")
+from gi.repository import Gtk, Gio, GLib, AyatanaAppIndicator3 as AppIndicator3
+
+from . import __version__
+
+APP_ID = "slow-coffee"
+REASON = "User asked to stay awake (slow-coffee)"
+
+# GNOME SessionManager inhibit flag: 8 = "session marked idle". We deliberately
+# do NOT add 4 ("suspend") so lid-close still sleeps the laptop.
+GSM_INHIBIT_IDLE = 8
+
+# (label, minutes) for the duration radio group; 0 == indefinitely
+DURATIONS = (("Indefinitely", 0), ("30 minutes", 30), ("1 hour", 60), ("2 hours", 120))
+
+
+def find_icons_dir():
+    """Locate the cup icons, whether pip-installed or run from a checkout."""
+    here = dirname(abspath(__file__))
+    for path in (join(here, "icons"),
+                 join("/usr/share", APP_ID, "icons"),
+                 join(os.path.expanduser("~/.local/share"), APP_ID, "icons")):
+        if isdir(path):
+            return path
+    return here
+
+
+class Inhibitor:
+    """Holds at most one idle inhibitor, trying backends in order of preference.
+
+    One persistent session-bus connection is kept for the whole run: the
+    freedesktop ScreenSaver inhibit is bound to the D-Bus sender, so dropping the
+    connection would silently release it.
+    """
+
+    def __init__(self):
+        self.backend = None        # "gnome" | "screensaver" | "systemd"
+        self.cookie = None         # for the D-Bus backends
+        self.proc = None           # for the systemd-inhibit child
+        try:
+            self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        except GLib.Error:
+            self.bus = None
+
+    @property
+    def active(self):
+        return self.backend is not None
+
+    def _dbus_inhibit(self, name, path, iface, method, args, sig):
+        if self.bus is None:
+            return None
+        try:
+            res = self.bus.call_sync(
+                name, path, iface, method,
+                GLib.Variant(sig, args), GLib.VariantType("(u)"),
+                Gio.DBusCallFlags.NONE, 4000, None)
+            return res.unpack()[0]
+        except GLib.Error:
+            return None
+
+    def _dbus_uninhibit(self, name, path, iface, method, cookie):
+        try:
+            self.bus.call_sync(
+                name, path, iface, method,
+                GLib.Variant("(u)", (cookie,)), None,
+                Gio.DBusCallFlags.NONE, 4000, None)
+        except GLib.Error:
+            pass
+
+    def acquire(self):
+        if self.active:
+            return self.backend
+        cookie = self._dbus_inhibit(
+            "org.gnome.SessionManager", "/org/gnome/SessionManager",
+            "org.gnome.SessionManager", "Inhibit",
+            (APP_ID, 0, REASON, GSM_INHIBIT_IDLE), "(susu)")
+        if cookie is not None:
+            self.backend, self.cookie = "gnome", cookie
+            return self.backend
+        cookie = self._dbus_inhibit(
+            "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver",
+            "org.freedesktop.ScreenSaver", "Inhibit",
+            (APP_ID, REASON), "(ss)")
+        if cookie is not None:
+            self.backend, self.cookie = "screensaver", cookie
+            return self.backend
+        try:
+            self.proc = subprocess.Popen(
+                ["systemd-inhibit", "--what=idle", "--who=slow-coffee",
+                 "--why=" + REASON, "--mode=block", "sleep", "infinity"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.backend = "systemd"
+            return self.backend
+        except (OSError, FileNotFoundError):
+            return None
+
+    def release(self):
+        if self.backend == "gnome":
+            self._dbus_uninhibit(
+                "org.gnome.SessionManager", "/org/gnome/SessionManager",
+                "org.gnome.SessionManager", "Uninhibit", self.cookie)
+        elif self.backend == "screensaver":
+            self._dbus_uninhibit(
+                "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver",
+                "org.freedesktop.ScreenSaver", "UnInhibit", self.cookie)
+        elif self.backend == "systemd" and self.proc is not None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.backend = self.cookie = self.proc = None
+
+
+class SlowCoffee:
+    def __init__(self, start_active=True, minutes=0):
+        self.inhibitor = Inhibitor()
+        self.timer_id = None
+        self.icons = find_icons_dir()
+
+        self.ind = AppIndicator3.Indicator.new_with_path(
+            APP_ID, "slow-coffee-empty",
+            AppIndicator3.IndicatorCategory.APPLICATION_STATUS, self.icons)
+        self.ind.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+        self.ind.set_title("slow-coffee")
+        self.ind.set_menu(self._build_menu())
+
+        if start_active:
+            self.activate(minutes)
+        else:
+            self._refresh()
+
+    # --- menu -------------------------------------------------------------
+    def _build_menu(self):
+        menu = Gtk.Menu()
+
+        self.toggle_item = Gtk.MenuItem(label="Deactivate")
+        self.toggle_item.connect("activate", self.on_toggle)
+        menu.append(self.toggle_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        self.duration_items = []
+        for label, mins in DURATIONS:
+            item = Gtk.RadioMenuItem(label=label)
+            if self.duration_items:
+                item.join_group(self.duration_items[0])
+            item.set_active(mins == 0)
+            item.connect("activate", self.on_pick_duration, mins)
+            self.duration_items.append(item)
+            menu.append(item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        about = Gtk.MenuItem(label="About slow-coffee")
+        about.connect("activate", self.on_about)
+        menu.append(about)
+
+        quit_item = Gtk.MenuItem(label="Quit")
+        quit_item.connect("activate", self.on_quit)
+        menu.append(quit_item)
+
+        menu.show_all()
+        return menu
+
+    # --- state ------------------------------------------------------------
+    def _clear_timer(self):
+        if self.timer_id is not None:
+            GLib.source_remove(self.timer_id)
+            self.timer_id = None
+
+    def activate(self, minutes=0):
+        backend = self.inhibitor.acquire()
+        self._clear_timer()
+        if minutes > 0:
+            self.timer_id = GLib.timeout_add_seconds(minutes * 60, self._expire)
+        self._refresh(backend)
+
+    def deactivate(self):
+        self._clear_timer()
+        self.inhibitor.release()
+        self._refresh()
+
+    def _expire(self):
+        self.timer_id = None
+        self.deactivate()
+        if self.duration_items:
+            self.duration_items[0].set_active(True)
+        return False  # one-shot
+
+    def _refresh(self, backend=None):
+        on = self.inhibitor.active
+        self.ind.set_icon_full(
+            "slow-coffee-full" if on else "slow-coffee-empty",
+            "caffeinated" if on else "decaf")
+        self.toggle_item.set_label("Deactivate" if on else "Activate")
+        via = " via %s" % backend if backend else ""
+        self.ind.set_title("slow-coffee: %s%s" % ("awake" if on else "off", via))
+
+    # --- callbacks --------------------------------------------------------
+    def on_toggle(self, _item):
+        if self.inhibitor.active:
+            self.deactivate()
+        else:
+            self.activate(self._selected_minutes())
+
+    def on_pick_duration(self, item, minutes):
+        if item.get_active():
+            self.activate(minutes)
+
+    def _selected_minutes(self):
+        for item, (_label, mins) in zip(self.duration_items, DURATIONS):
+            if item.get_active():
+                return mins
+        return 0
+
+    def on_about(self, _item):
+        d = Gtk.AboutDialog()
+        d.set_program_name("slow-coffee")
+        d.set_version(__version__)
+        d.set_comments("A take-your-time keep-awake indicator.\n"
+                       "On by default; sips D-Bus, not your battery.")
+        d.set_website("https://github.com/PLNech/slow-coffee")
+        d.set_license_type(Gtk.License.MIT_X11)
+        d.run()
+        d.destroy()
+
+    def on_quit(self, _item):
+        self.deactivate()
+        Gtk.main_quit()

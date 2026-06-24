@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slow-coffee"
+dynamic = ["version"]
+description = "A take-your-time keep-awake indicator for your system tray - on by default."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "PLNech" }]
+keywords = ["caffeine", "caffeinate", "keep-awake", "idle", "screensaver",
+            "tray", "appindicator", "gnome", "wayland", "presentation"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Desktop Environment",
+    "Topic :: Utilities",
+]
+# PyGObject + AyatanaAppIndicator3 GIR come from the system (see README); pip can
+# build PyGObject too if the GObject-introspection dev headers are present.
+dependencies = ["PyGObject>=3.42"]
+
+[project.urls]
+Homepage = "https://github.com/PLNech/slow-coffee"
+Source = "https://github.com/PLNech/slow-coffee"
+Issues = "https://github.com/PLNech/slow-coffee/issues"
+
+[project.scripts]
+slow-coffee = "slow_coffee.__main__:main"
+
+[tool.setuptools]
+packages = ["slow_coffee"]
+
+[tool.setuptools.dynamic]
+version = { attr = "slow_coffee.__version__" }
+
+[tool.setuptools.package-data]
+slow_coffee = ["icons/*.png"]

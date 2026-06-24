@@ -1,0 +1,28 @@
+Source: slow-coffee
+Section: utils
+Priority: optional
+Maintainer: PLNech <1821404+PLNech@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               pybuild-plugin-pyproject,
+               python3-all,
+               python3-setuptools
+Standards-Version: 4.6.2
+Homepage: https://github.com/PLNech/slow-coffee
+Rules-Requires-Root: no
+
+Package: slow-coffee
+Architecture: all
+Depends: ${python3:Depends},
+         ${misc:Depends},
+         python3-gi,
+         gir1.2-gtk-3.0,
+         gir1.2-ayatanaappindicator3-0.1
+Description: take-your-time keep-awake tray indicator
+ slow-coffee is a small system-tray coffee cup that stops your screen blanking
+ and your session going idle. It is on by default - the cup boots full - because
+ the point is to stay awake until you say otherwise.
+ .
+ Idle is inhibited over D-Bus, preferring the running session daemon
+ (org.gnome.SessionManager, then org.freedesktop.ScreenSaver) and falling back
+ to systemd-inhibit. Idle-only by default, so closing the lid still suspends.

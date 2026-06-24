@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Slow Coffee
+GenericName=Keep Awake
+Comment=Keep your screen awake - on by default, sip at your own pace
+Exec=slow-coffee
+Icon=slow-coffee
+Terminal=false
+Categories=Utility;GTK;
+Keywords=caffeine;caffeinate;awake;idle;screensaver;inhibit;presentation;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
