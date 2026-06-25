@@ -52,7 +52,7 @@ jobs:
       - name: Install packaging deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y devscripts debhelper dh-python \
+          sudo apt-get install -y build-essential devscripts debhelper dh-python \
             pybuild-plugin-pyproject python3-all python3-setuptools
       - run: dpkg-buildpackage -us -uc -b
       - name: Collect .deb
