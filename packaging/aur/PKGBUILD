@@ -10,7 +10,7 @@ depends=('python' 'python-gobject' 'gtk3' 'libayatana-appindicator')
 makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/PLNech/slow-coffee/archive/refs/tags/v$pkgver.tar.gz")
 # Replace SKIP with the real checksum after tagging:  updpkgsums
-sha256sums=('SKIP')
+sha256sums=('00106f5fb79802edde2f701781ed8dd06c1860691eaae6c74dd93293eea737f9')
 
 build() {
   cd "$pkgname-$pkgver"

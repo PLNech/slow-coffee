@@ -14,6 +14,6 @@ pkgbase = slow-coffee
 	depends = gtk3
 	depends = libayatana-appindicator
 	source = slow-coffee-1.0.0.tar.gz::https://github.com/PLNech/slow-coffee/archive/refs/tags/v1.0.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = 00106f5fb79802edde2f701781ed8dd06c1860691eaae6c74dd93293eea737f9
 
 pkgname = slow-coffee
