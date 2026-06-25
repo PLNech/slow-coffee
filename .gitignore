@@ -21,3 +21,6 @@ debian/*.substvars
 .idea/
 .vscode/
 .DS_Store
+
+# Personal blog drafts (kept local until published elsewhere)
+docs/blog/
