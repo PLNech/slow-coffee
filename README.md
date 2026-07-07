@@ -84,7 +84,15 @@ cup appears in the tray, already caffeinated. Click it for the menu:
 |------|------|
 | Activate / Deactivate | Toggle the inhibitor by hand |
 | Indefinitely / 30 min / 1 h / 2 h | Pick a duration; it auto-stops when time is up |
+| Start at boot | Add/remove the autostart entry - launch slow-coffee at login |
+| Coffee at boot | When autostarted, boot caffeinated (off = boot decaf) |
 | About / Quit | The usual |
+
+**Start at boot** and **Coffee at boot** are the checkbox equivalents of
+`--autostart` and `--start-inactive`: the first writes (or removes) the
+autostart `.desktop` entry, the second decides whether that entry launches
+caffeinated. They configure the *next* login, not the running cup, and the
+"coffee at boot" choice is remembered in `~/.config/slow-coffee/settings.json`.
 
 ```sh
 slow-coffee                  # start caffeinated, forever

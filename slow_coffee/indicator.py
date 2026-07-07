@@ -22,9 +22,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import Gtk, Gio, GLib, AyatanaAppIndicator3 as AppIndicator3
 
-from . import __version__
+from . import __version__, APP_ID, desktop, settings
 
-APP_ID = "slow-coffee"
 REASON = "User asked to stay awake (slow-coffee)"
 
 # GNOME SessionManager inhibit flag: 8 = "session marked idle". We deliberately
@@ -138,6 +137,10 @@ class SlowCoffee:
         self.inhibitor = Inhibitor()
         self.timer_id = None
         self.icons = find_icons_dir()
+        # Seed "coffee at boot" from any pre-existing autostart entry so the
+        # checkbox reflects reality on first run rather than clobbering it.
+        self.settings = settings.load(
+            seed={"coffee_at_boot": desktop.autostart_start_active()})
 
         self.ind = AppIndicator3.Indicator.new_with_path(
             APP_ID, "slow-coffee-empty",
@@ -170,6 +173,18 @@ class SlowCoffee:
             item.connect("activate", self.on_pick_duration, mins)
             self.duration_items.append(item)
             menu.append(item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        self.boot_item = Gtk.CheckMenuItem(label="Start at boot")
+        self.boot_item.set_active(desktop.autostart_enabled())
+        self.boot_item.connect("toggled", self.on_toggle_boot)
+        menu.append(self.boot_item)
+
+        self.coffee_boot_item = Gtk.CheckMenuItem(label="Coffee at boot")
+        self.coffee_boot_item.set_active(self.settings["coffee_at_boot"])
+        self.coffee_boot_item.connect("toggled", self.on_toggle_coffee_boot)
+        menu.append(self.coffee_boot_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -228,6 +243,19 @@ class SlowCoffee:
     def on_pick_duration(self, item, minutes):
         if item.get_active():
             self.activate(minutes)
+
+    def on_toggle_boot(self, item):
+        # Presence of the autostart entry IS the "start at boot" state; write it
+        # with the Exec line that honours the current "coffee at boot" choice.
+        desktop.set_autostart(item.get_active(),
+                              start_active=self.settings["coffee_at_boot"])
+
+    def on_toggle_coffee_boot(self, item):
+        self.settings["coffee_at_boot"] = item.get_active()
+        settings.save(self.settings)
+        # If we already start at boot, rewrite the entry so the next login obeys.
+        if desktop.autostart_enabled():
+            desktop.set_autostart(True, start_active=item.get_active())
 
     def _selected_minutes(self):
         for item, (_label, mins) in zip(self.duration_items, DURATIONS):

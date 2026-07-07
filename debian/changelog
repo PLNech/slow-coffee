@@ -1,3 +1,9 @@
+slow-coffee (1.1.0) unstable; urgency=medium
+
+  * Add "Start at boot" and "Coffee at boot" tray toggles.
+
+ -- PLNech <1821404+PLNech@users.noreply.github.com>  Tue, 07 Jul 2026 00:00:00 +0000
+
 slow-coffee (1.0.0) unstable; urgency=medium
 
   * Initial release.

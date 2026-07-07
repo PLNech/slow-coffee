@@ -55,7 +55,8 @@ def main(argv=None):
 
     if args.install_desktop:
         from . import desktop
-        written = desktop.install(autostart=args.autostart)
+        written = desktop.install(autostart=args.autostart,
+                                  start_active=not args.start_inactive)
         print("Installed:")
         for path in written:
             print("  +", path)

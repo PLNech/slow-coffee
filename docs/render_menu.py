@@ -78,6 +78,10 @@ def build():
         box.pack_start(lbl(bullet + label, "sc-row", cls), False, False, 0)
 
     box.pack_start(sep(), False, False, 0)
+    box.pack_start(lbl("☑ Start at boot", "sc-row", "sc-row-on"), False, False, 0)
+    box.pack_start(lbl("☑ Coffee at boot", "sc-row", "sc-row-on"), False, False, 0)
+
+    box.pack_start(sep(), False, False, 0)
     box.pack_start(lbl("About slow-coffee", "sc-row", "sc-dim"), False, False, 0)
     box.pack_start(lbl("Quit", "sc-row", "sc-dim"), False, False, 0)
     return box

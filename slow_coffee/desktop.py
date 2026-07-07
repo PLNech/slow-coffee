@@ -9,23 +9,32 @@ import os
 import shutil
 from os.path import join, dirname, abspath, exists
 
-from .indicator import APP_ID
+from . import APP_ID
 
-DESKTOP_BODY = """\
-[Desktop Entry]
-Type=Application
-Name=Slow Coffee
-GenericName=Keep Awake
-Comment=Keep your screen awake - on by default, sip at your own pace
-Exec=slow-coffee
-Icon=slow-coffee
-Terminal=false
-Categories=Utility;GTK;
-Keywords=caffeine;caffeinate;awake;idle;screensaver;inhibit;presentation;
-StartupNotify=false
-"""
 
-AUTOSTART_EXTRA = "X-GNOME-Autostart-enabled=true\n"
+def _desktop_body(exec_cmd="slow-coffee", autostart=False):
+    """Build a .desktop entry. ``exec_cmd`` lets the autostart copy encode
+    "coffee at boot" (``slow-coffee`` vs ``slow-coffee --start-inactive``)."""
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Slow Coffee",
+        "GenericName=Keep Awake",
+        "Comment=Keep your screen awake - on by default, sip at your own pace",
+        "Exec=" + exec_cmd,
+        "Icon=slow-coffee",
+        "Terminal=false",
+        "Categories=Utility;GTK;",
+        "Keywords=caffeine;caffeinate;awake;idle;screensaver;inhibit;presentation;",
+        "StartupNotify=false",
+    ]
+    if autostart:
+        lines.append("X-GNOME-Autostart-enabled=true")
+    return "\n".join(lines) + "\n"
+
+
+def _autostart_exec(start_active):
+    return "slow-coffee" if start_active else "slow-coffee --start-inactive"
 
 
 def _xdg(*parts):
@@ -42,7 +51,46 @@ def _src_icon():
     return join(dirname(abspath(__file__)), "icons", "slow-coffee-full.png")
 
 
-def install(autostart=False):
+def autostart_path():
+    """Where the "start at login" entry lives (its presence == start-at-boot on)."""
+    return _config("autostart", "slow-coffee.desktop")
+
+
+def autostart_enabled():
+    return exists(autostart_path())
+
+
+def autostart_start_active():
+    """Read whether the existing autostart entry boots caffeinated.
+
+    Parsed from its ``Exec`` line (no ``--start-inactive`` == caffeinated).
+    Defaults to True when there is no entry to read.
+    """
+    try:
+        with open(autostart_path()) as f:
+            for line in f:
+                if line.startswith("Exec="):
+                    return "--start-inactive" not in line
+    except OSError:
+        pass
+    return True
+
+
+def set_autostart(enabled, start_active=True):
+    """Create or remove the autostart entry. When creating, ``start_active``
+    picks the Exec line so the next login honours "coffee at boot".
+    Returns the path touched."""
+    path = autostart_path()
+    if enabled:
+        os.makedirs(dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(_desktop_body(exec_cmd=_autostart_exec(start_active), autostart=True))
+    elif exists(path):
+        os.remove(path)
+    return path
+
+
+def install(autostart=False, start_active=True):
     """Install the launcher + icon (+ optional autostart). Returns paths written."""
     written = []
 
@@ -54,15 +102,11 @@ def install(autostart=False):
     desktop_dst = _xdg("applications", "slow-coffee.desktop")
     os.makedirs(dirname(desktop_dst), exist_ok=True)
     with open(desktop_dst, "w") as f:
-        f.write(DESKTOP_BODY)
+        f.write(_desktop_body())
     written.append(desktop_dst)
 
     if autostart:
-        auto_dst = _config("autostart", "slow-coffee.desktop")
-        os.makedirs(dirname(auto_dst), exist_ok=True)
-        with open(auto_dst, "w") as f:
-            f.write(DESKTOP_BODY + AUTOSTART_EXTRA)
-        written.append(auto_dst)
+        written.append(set_autostart(True, start_active=start_active))
 
     # refresh the menu cache if the tool is around (best-effort)
     try:
