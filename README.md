@@ -29,6 +29,9 @@ caffeinated and stays that way. One click (or a timer) to stop.
 - **Honest icon.** Full = really inhibiting; empty = really not. No lying cup.
 - **Idle-only by default.** The screen stays on, but closing the lid still
   suspends - safer for a laptop than blocking all sleep.
+- **Sleep mode, opt-in.** Menu radio group: **Idle only** / **Sleep only**
+  (lid-close safe, screen can still lock) / **Both**. For a detached job you
+  can't afford to lose to a suspend.
 - **Timers.** 30 min / 1 hour / 2 hours / indefinitely, from the menu or
   `--minutes N`.
 - **Self-contained.** Bundles its own icons; no theme or extra data package.

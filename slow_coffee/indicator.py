@@ -1,14 +1,27 @@
-"""The tray indicator and the idle-inhibition backends.
+"""The tray indicator and the idle/sleep-inhibition backends.
 
-Idle inhibition is requested over D-Bus, preferring the running session daemon
-and falling back to logind:
+Inhibition is requested over D-Bus, preferring the running session daemon and
+falling back to logind:
 
     1. org.gnome.SessionManager.Inhibit   (GNOME; X11 verified, Wayland expected)
     2. org.freedesktop.ScreenSaver.Inhibit (KDE / freedesktop)
-    3. systemd-inhibit --what=idle         (logind fallback for bare WMs)
+    3. systemd-inhibit --what=...          (logind fallback for bare WMs)
 
-Default flag is *idle only* (8): the screen stays on, but closing the lid still
-suspends - safer for a laptop than blocking all sleep.
+Three selectable modes, from the tray menu:
+
+    - **Idle only** (default, safest): screen stays on, but closing the lid or
+      a power-button suspend still sleeps the laptop.
+    - **Sleep only**: the screen can still blank/lock on its own, but the
+      machine itself won't suspend - including on lid-close.
+    - **Both**: neither idle-blanking nor suspend happens.
+
+GNOME's SessionManager covers both axes with one Inhibit flag (idle=8,
+suspend=4, both=12 - just OR them). The freedesktop ScreenSaver interface can
+only ever inhibit the *screensaver* (no suspend concept), so on that backend -
+or on a bare WM with neither D-Bus service - a "sleep"/"both" request also
+spawns a `systemd-inhibit --what=sleep:handle-lid-switch` companion process
+for the sleep leg. `handle-lid-switch` is included so "sleep" genuinely means
+lid-close-safe, matching what "both" promises.
 
 This is an independent implementation; see the README's "Prior art" note.
 """
@@ -26,12 +39,27 @@ from . import __version__, APP_ID, desktop, settings
 
 REASON = "User asked to stay awake (slow-coffee)"
 
-# GNOME SessionManager inhibit flag: 8 = "session marked idle". We deliberately
-# do NOT add 4 ("suspend") so lid-close still sleeps the laptop.
+# GNOME SessionManager inhibit flags: 8 = "session marked idle" (screen stays
+# on), 4 = "suspend" (covers logout-triggered *and* lid-close-triggered sleep).
+# They combine by OR: idle-only=8, sleep-only=4, both=12.
 GSM_INHIBIT_IDLE = 8
+GSM_INHIBIT_SUSPEND = 4
+
+# systemd-inhibit --what= value per mode; sleep modes include the lid switch
+# so "sleep" isn't quietly defeated by closing the laptop.
+SYSTEMD_WHAT = {
+    "idle": "idle",
+    "sleep": "sleep:handle-lid-switch",
+    "both": "idle:sleep:handle-lid-switch",
+}
 
 # (label, minutes) for the duration radio group; 0 == indefinitely
 DURATIONS = (("Indefinitely", 0), ("30 minutes", 30), ("1 hour", 60), ("2 hours", 120))
+
+# (label, mode) for the inhibit-mode radio group
+MODES = (("Idle only (screen stays on)", "idle"),
+          ("Sleep only (lid-close safe)", "sleep"),
+          ("Both", "both"))
 
 
 def find_icons_dir():
@@ -46,17 +74,25 @@ def find_icons_dir():
 
 
 class Inhibitor:
-    """Holds at most one idle inhibitor, trying backends in order of preference.
+    """Holds at most one active inhibition (idle/sleep/both), trying backends
+    in order of preference.
 
     One persistent session-bus connection is kept for the whole run: the
     freedesktop ScreenSaver inhibit is bound to the D-Bus sender, so dropping the
     connection would silently release it.
+
+    GNOME's SessionManager covers idle and suspend in one call (OR the flags).
+    Everything else can only inhibit the screensaver, never suspend - a "sleep"
+    or "both" request there gets a companion systemd-inhibit process for the
+    sleep leg, tracked separately so release() can tear down both halves.
     """
 
     def __init__(self):
         self.backend = None        # "gnome" | "screensaver" | "systemd"
+        self.mode = None           # "idle" | "sleep" | "both", once active
         self.cookie = None         # for the D-Bus backends
-        self.proc = None           # for the systemd-inhibit child
+        self.proc = None           # for the systemd-inhibit child (own backend
+                                    # OR the sleep-leg companion under screensaver)
         try:
             self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         except GLib.Error:
@@ -87,32 +123,51 @@ class Inhibitor:
         except GLib.Error:
             pass
 
-    def acquire(self):
+    def acquire(self, mode="idle"):
         if self.active:
             return self.backend
+        idle = mode in ("idle", "both")
+        sleep = mode in ("sleep", "both")
+        flag = (GSM_INHIBIT_IDLE if idle else 0) | (GSM_INHIBIT_SUSPEND if sleep else 0)
         cookie = self._dbus_inhibit(
             "org.gnome.SessionManager", "/org/gnome/SessionManager",
             "org.gnome.SessionManager", "Inhibit",
-            (APP_ID, 0, REASON, GSM_INHIBIT_IDLE), "(susu)")
+            (APP_ID, 0, REASON, flag), "(susu)")
         if cookie is not None:
-            self.backend, self.cookie = "gnome", cookie
+            self.backend, self.cookie, self.mode = "gnome", cookie, mode
             return self.backend
-        cookie = self._dbus_inhibit(
-            "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver",
-            "org.freedesktop.ScreenSaver", "Inhibit",
-            (APP_ID, REASON), "(ss)")
-        if cookie is not None:
-            self.backend, self.cookie = "screensaver", cookie
+
+        # freedesktop ScreenSaver has no concept of "suspend" - it only ever
+        # covers the idle leg, so take it when idle is wanted but still spawn
+        # a systemd-inhibit companion below if sleep is also wanted.
+        if idle:
+            cookie = self._dbus_inhibit(
+                "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver",
+                "org.freedesktop.ScreenSaver", "Inhibit",
+                (APP_ID, REASON), "(ss)")
+            if cookie is not None:
+                self.backend, self.cookie, self.mode = "screensaver", cookie, mode
+                if sleep:
+                    self._spawn_systemd("sleep:handle-lid-switch")
+                return self.backend
+
+        # Bare WM (or ScreenSaver unavailable): systemd-inhibit is the only
+        # backend left, and it can cover idle/sleep/both in a single process.
+        if self._spawn_systemd(SYSTEMD_WHAT[mode]):
+            self.backend, self.mode = "systemd", mode
             return self.backend
+        return None
+
+    def _spawn_systemd(self, what):
         try:
             self.proc = subprocess.Popen(
-                ["systemd-inhibit", "--what=idle", "--who=slow-coffee",
+                ["systemd-inhibit", "--what=" + what, "--who=slow-coffee",
                  "--why=" + REASON, "--mode=block", "sleep", "infinity"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.backend = "systemd"
-            return self.backend
+            return True
         except (OSError, FileNotFoundError):
-            return None
+            self.proc = None
+            return False
 
     def release(self):
         if self.backend == "gnome":
@@ -123,13 +178,13 @@ class Inhibitor:
             self._dbus_uninhibit(
                 "org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver",
                 "org.freedesktop.ScreenSaver", "UnInhibit", self.cookie)
-        elif self.backend == "systemd" and self.proc is not None:
+        if self.proc is not None:
             self.proc.terminate()
             try:
                 self.proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
-        self.backend = self.cookie = self.proc = None
+        self.backend = self.mode = self.cookie = self.proc = None
 
 
 class SlowCoffee:
@@ -161,6 +216,18 @@ class SlowCoffee:
         self.toggle_item = Gtk.MenuItem(label="Deactivate")
         self.toggle_item.connect("activate", self.on_toggle)
         menu.append(self.toggle_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        self.mode_items = []
+        for label, mode in MODES:
+            item = Gtk.RadioMenuItem(label=label)
+            if self.mode_items:
+                item.join_group(self.mode_items[0])
+            item.set_active(mode == "idle")
+            item.connect("activate", self.on_pick_mode, mode)
+            self.mode_items.append(item)
+            menu.append(item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -205,8 +272,8 @@ class SlowCoffee:
             GLib.source_remove(self.timer_id)
             self.timer_id = None
 
-    def activate(self, minutes=0):
-        backend = self.inhibitor.acquire()
+    def activate(self, minutes=0, mode=None):
+        backend = self.inhibitor.acquire(mode or self._selected_mode())
         self._clear_timer()
         if minutes > 0:
             self.timer_id = GLib.timeout_add_seconds(minutes * 60, self._expire)
@@ -230,7 +297,7 @@ class SlowCoffee:
             "slow-coffee-full" if on else "slow-coffee-empty",
             "caffeinated" if on else "decaf")
         self.toggle_item.set_label("Deactivate" if on else "Activate")
-        via = " via %s" % backend if backend else ""
+        via = " via %s (%s)" % (backend, self.inhibitor.mode) if backend else ""
         self.ind.set_title("slow-coffee: %s%s" % ("awake" if on else "off", via))
 
     # --- callbacks --------------------------------------------------------
@@ -243,6 +310,15 @@ class SlowCoffee:
     def on_pick_duration(self, item, minutes):
         if item.get_active():
             self.activate(minutes)
+
+    def on_pick_mode(self, item, mode):
+        # A running inhibitor's flags are set at acquire time - switching mode
+        # while active means release-then-reacquire, not just changing state.
+        # (Restarts the selected timer duration rather than tracking the
+        # precise remainder - switching mode mid-timer is a rare edge case.)
+        if item.get_active() and self.inhibitor.active:
+            self.deactivate()
+            self.activate(self._selected_minutes(), mode)
 
     def on_toggle_boot(self, item):
         # Presence of the autostart entry IS the "start at boot" state; write it
@@ -262,6 +338,12 @@ class SlowCoffee:
             if item.get_active():
                 return mins
         return 0
+
+    def _selected_mode(self):
+        for item, (_label, mode) in zip(self.mode_items, MODES):
+            if item.get_active():
+                return mode
+        return "idle"
 
     def on_about(self, _item):
         d = Gtk.AboutDialog()

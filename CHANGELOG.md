@@ -4,6 +4,17 @@ All notable changes to slow-coffee are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## [1.2.0] - 2026-07-26
+
+### Added
+- Inhibit-mode radio group in the tray menu: **Idle only** (default, lid-close
+  still suspends) / **Sleep only** (screen can still lock, but the machine
+  won't suspend - lid-close included) / **Both**. Sleep coverage on GNOME is
+  one `SessionManager.Inhibit` flag; on the freedesktop ScreenSaver / bare-WM
+  fallbacks (which have no "suspend" concept of their own) it's a companion
+  `systemd-inhibit --what=sleep:handle-lid-switch` process alongside the idle
+  leg. Switching mode while active releases and re-acquires with the new flags.
+
 ## [1.1.0] - 2026-07-07
 
 ### Added
