@@ -116,16 +116,24 @@ slow-coffee --uninstall-desktop             # undo the above
 slow-coffee asks the session to not go idle, preferring whatever is actually
 running and falling back gracefully:
 
-1. **`org.gnome.SessionManager.Inhibit`** (flag `8`, idle) - GNOME.
+1. **`org.gnome.SessionManager.Inhibit`** (flags: idle `8`, suspend `4`,
+   both `12`) - GNOME.
    *X11 verified; GNOME-Wayland expected but untested by the author.*
 2. **`org.freedesktop.ScreenSaver.Inhibit`** - KDE and other freedesktop shells.
-3. **`systemd-inhibit --what=idle`** - logind fallback for bare window managers.
+3. **`systemd-inhibit --what=...`** - logind fallback for bare window managers.
 
-It holds one persistent session-bus connection and releases the inhibitor on
-quit. It does **not** add the "suspend" flag, so lid-close still sleeps. Wayland
-note: the idle-inhibit protocol is per-surface, so a global manual inhibitor is
-shell-dependent; under GNOME the SessionManager call covers it, under wlroots
-your mileage varies and the `systemd-inhibit` fallback handles sleep.
+In the *Idle only* mode (the default) lid-close still sleeps the machine, by
+design. In *Sleep only* / *Both*, slow-coffee additionally spawns a
+`systemd-inhibit --what=sleep:handle-lid-switch` companion process on backends
+1 and 2 - session-level suspend inhibitors are *not* lid-close inhibitors,
+since logind's default `LidSwitchIgnoreInhibited=yes` ignores everything that
+doesn't name `handle-lid-switch`. Backend 3 already names it itself.
+
+It holds one persistent session-bus connection and releases every inhibitor on
+quit. Wayland note: the idle-inhibit protocol is per-surface, so a global manual
+inhibitor is shell-dependent; under GNOME the SessionManager call covers it,
+under wlroots your mileage varies and the `systemd-inhibit` fallback handles
+sleep.
 
 ## Slow mode (optional)
 

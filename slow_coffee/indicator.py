@@ -16,12 +16,16 @@ Three selectable modes, from the tray menu:
     - **Both**: neither idle-blanking nor suspend happens.
 
 GNOME's SessionManager covers both axes with one Inhibit flag (idle=8,
-suspend=4, both=12 - just OR them). The freedesktop ScreenSaver interface can
-only ever inhibit the *screensaver* (no suspend concept), so on that backend -
-or on a bare WM with neither D-Bus service - a "sleep"/"both" request also
-spawns a `systemd-inhibit --what=sleep:handle-lid-switch` companion process
-for the sleep leg. `handle-lid-switch` is included so "sleep" genuinely means
-lid-close-safe, matching what "both" promises.
+suspend=4, both=12 - just OR them), and the freedesktop ScreenSaver interface
+covers only the *screensaver* (it has no suspend concept at all). Neither,
+however, is enough to survive a closed lid: logind's default
+`LidSwitchIgnoreInhibited=yes` makes it ignore ordinary sleep inhibitors on
+lid-close and honour only one that names `handle-lid-switch`. So whichever
+session backend wins, a "sleep"/"both" request *also* spawns a
+`systemd-inhibit --what=sleep:handle-lid-switch` companion process for the
+sleep leg - that companion, not the session inhibitor, is what makes "sleep"
+genuinely lid-close-safe. Backend 3 needs no companion: it *is* one, and its
+`--what` already names the lid switch.
 
 A fourth, *optional* trick rides on top: **slow mode**. A laptop kept awake with
 its lid shut is a laptop cooking itself in a bag, so when the host provides a
@@ -298,9 +302,12 @@ class Inhibitor:
     connection would silently release it.
 
     GNOME's SessionManager covers idle and suspend in one call (OR the flags).
-    Everything else can only inhibit the screensaver, never suspend - a "sleep"
-    or "both" request there gets a companion systemd-inhibit process for the
-    sleep leg, tracked separately so release() can tear down both halves.
+    Everything else can only inhibit the screensaver, never suspend. Either way,
+    any mode with a sleep leg ("sleep"/"both") also gets a companion
+    systemd-inhibit process holding ``sleep:handle-lid-switch`` - session-level
+    suspend inhibitors do not survive a lid-close, see acquire() - tracked
+    separately so release() can tear down both halves. The systemd backend needs
+    no companion: its own --what already names the lid switch.
     """
 
     def __init__(self):
@@ -351,6 +358,14 @@ class Inhibitor:
             (APP_ID, 0, REASON, flag), "(susu)")
         if cookie is not None:
             self.backend, self.cookie, self.mode = "gnome", cookie, mode
+            # A session-level suspend inhibit is NOT a lid-close inhibit: logind
+            # ships with LidSwitchIgnoreInhibited=yes, so on lid-close it steps
+            # over ordinary sleep inhibitors and only respects one that names
+            # handle-lid-switch. Field evidence: coffee on, lid shut, "Lid
+            # closed." and "Suspending..." in the same journal second. So the
+            # sleep leg gets the same logind companion the other backends use.
+            if sleep:
+                self._spawn_systemd("sleep:handle-lid-switch")
             return self.backend
 
         # freedesktop ScreenSaver has no concept of "suspend" - it only ever

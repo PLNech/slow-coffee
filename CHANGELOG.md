@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning is
 
 ## [Unreleased]
 
+### Fixed
+- **"Sleep only"/"Both" now really survive a closed lid on GNOME.** logind
+  ships with `LidSwitchIgnoreInhibited=yes`, so on lid-close it ignores every
+  sleep inhibitor that does not name `handle-lid-switch` — including GNOME
+  SessionManager's suspend flag. Coffee on, lid shut, and the journal recorded
+  "Lid closed." and "Suspending..." in the same second. The
+  `systemd-inhibit --what=sleep:handle-lid-switch` companion process, until now
+  spawned only under the freedesktop-ScreenSaver backend, is now held on the
+  GNOME backend too. Idle-only mode is unchanged: it never promised lid safety.
+
 ### Changed — lessons from a field overheat (2026-07-27)
 A lid-shut, slow-mode laptop still overheated in a backpack: the power-capped
 CPU die never neared 90 °C, but half an hour of steady 15 W+ into a sealed bag
