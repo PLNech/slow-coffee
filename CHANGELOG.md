@@ -22,7 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning is
   GPU is awake (read-only) when slow mode engages.
 - Going slow now **blanks the display** when the lid is genuinely shut, via
   `org.gnome.ScreenSaver.SetActive`, falling back to `org.freedesktop.ScreenSaver`
-  and then to `xset dpms force off` on bare X11; the backend used is logged. The
+  and then to `xset dpms force off` on X11; the backend used is logged. In
+  practice GNOME's `SetActive` does not answer while the session is inhibited
+  and the freedesktop name rejects `SetActive` outright, so `xset` is what
+  carries an X11 GNOME session - the D-Bus attempts are kept short (1.2 s) so a
+  wedged screensaver can't stall the lid-close path. The
   idle inhibitor that keeps the machine awake is what stops the desktop blanking
   by itself, so a closed laptop used to sit there with its panel lit. *Slow now*
   with the lid open leaves the screen alone. If no backend will blank, slow mode

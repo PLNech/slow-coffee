@@ -112,12 +112,21 @@ def notify(summary, body=""):
         log.debug("notify-send unavailable: %s", err)
 
 
-# Screen blanking, tried in this order. A session that answers one of these
-# does the right thing on both X11 and Wayland; `xset` is the bare-X11 backstop.
+# Screen blanking, tried in this order, then `xset` as the bare-X11 backstop.
+# Neither D-Bus name is a sure thing: SetActive is not part of the freedesktop
+# idle-inhibition spec at all (KDE implements it as an extension, GNOME answers
+# NotSupported on that name), and gnome-shell's own SetActive has been observed
+# not replying while a session is inhibited. Hence the short timeout below and a
+# fallback chain that keeps going rather than trusting any single backend.
 SCREENSAVER_BACKENDS = (
     ("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver"),
     ("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver"),
 )
+
+# Deliberately impatient: this runs on the lid-close path, inside the GTK main
+# loop, so a wedged screensaver must cost us a moment - not four seconds of
+# frozen tray while the machine we are trying to cool sits there lit up.
+BLANK_TIMEOUT_MS = 1200
 
 # One grumble per process is plenty if no backend will blank the screen.
 _blank_warned = False
@@ -143,7 +152,7 @@ def blank_screen():
             bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
             bus.call_sync(name, path, name, "SetActive",
                           GLib.Variant("(b)", (True,)), None,
-                          Gio.DBusCallFlags.NONE, 4000, None)
+                          Gio.DBusCallFlags.NONE, BLANK_TIMEOUT_MS, None)
         except GLib.Error as err:
             log.info("%s would not blank the screen: %s", name, err)
             continue
