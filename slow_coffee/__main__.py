@@ -2,6 +2,7 @@
 
 import sys
 import signal
+import logging
 import argparse
 
 from . import __version__
@@ -13,6 +14,11 @@ def _run_indicator(start_active, minutes):
     # Kept lazy so --install-desktop / --version work without a display.
     from .indicator import SlowCoffee
     from gi.repository import Gtk, GLib
+
+    # One line on stderr per notable event; under an autostart/systemd launch
+    # that lands in the journal, which is where you'd look anyway.
+    logging.basicConfig(level=logging.INFO,
+                        format="slow-coffee: %(levelname)s %(message)s")
 
     app = SlowCoffee(start_active=start_active, minutes=minutes)
 

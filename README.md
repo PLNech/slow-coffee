@@ -34,6 +34,10 @@ caffeinated and stays that way. One click (or a timer) to stop.
   can't afford to lose to a suspend.
 - **Timers.** 30 min / 1 hour / 2 hours / indefinitely, from the menu or
   `--minutes N`.
+- **Slow mode, if your host can.** On machines with a thermal-mode helper,
+  closing the lid while caffeinated drops the CPU to its quietest mode (and puts
+  the old one back on open), with a temperature watchdog that lets the machine
+  sleep if it starts cooking anyway. Invisible everywhere else.
 - **Self-contained.** Bundles its own icons; no theme or extra data package.
 
 ## Install
@@ -89,6 +93,8 @@ cup appears in the tray, already caffeinated. Click it for the menu:
 | Indefinitely / 30 min / 1 h / 2 h | Pick a duration; it auto-stops when time is up |
 | Start at boot | Add/remove the autostart entry - launch slow-coffee at login |
 | Coffee at boot | When autostarted, boot caffeinated (off = boot decaf) |
+| Slow when lid closed | *(only where available)* Go slow automatically on lid-close |
+| Slow now | *(only where available)* Engage/release slow mode by hand |
 | About / Quit | The usual |
 
 **Start at boot** and **Coffee at boot** are the checkbox equivalents of
@@ -120,6 +126,32 @@ quit. It does **not** add the "suspend" flag, so lid-close still sleeps. Wayland
 note: the idle-inhibit protocol is per-surface, so a global manual inhibitor is
 shell-dependent; under GNOME the SessionManager call covers it, under wlroots
 your mileage varies and the `systemd-inhibit` fallback handles sleep.
+
+## Slow mode (optional)
+
+A laptop kept awake with the lid shut is a laptop running in a closed box. If
+your host provides a thermal-mode helper, slow-coffee can turn that into a
+non-problem:
+
+- **Requires** an executable `/usr/local/sbin/thermal-mode-apply <mode>`
+  (callable via `sudo -n`, i.e. whitelisted in sudoers) and a readable
+  `/etc/thermal-mode.conf` holding `MODE=<mode>`. If either is missing, the two
+  menu items never appear and slow-coffee behaves exactly as before - nothing to
+  opt out of.
+- **On lid close** (while caffeinated, with *Slow when lid closed* on) it
+  snapshots the current mode and asks the helper for `silent`. **On lid open** -
+  or when the coffee goes off, or on quit - it puts the snapshot back. If you
+  changed modes yourself in the meantime, your choice is left alone.
+- Lid state comes from logind's `LidClosed` property over D-Bus (a signal
+  subscription, not a poll).
+- **Thermal watchdog.** While slow, the CPU package temperature is sampled every
+  30 s (from the `x86_pkg_temp` thermal zone, found by name - zone numbering is
+  firmware order - or the `coretemp` hwmon). Three consecutive samples above
+  90 °C and slow-coffee releases *every* inhibitor and notifies you: letting the
+  machine suspend beats cooking it. The app stays running, decaf.
+- If a discrete GPU is awake (`runtime_status` not `suspended`) when slow mode
+  engages, you get a heads-up notification. slow-coffee only ever *reads* that
+  file.
 
 ## Prior art
 

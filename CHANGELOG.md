@@ -4,6 +4,24 @@ All notable changes to slow-coffee are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Slow mode** (opt-out, and only where the host supports it): while
+  caffeinated, closing the lid switches the machine to its quietest thermal mode
+  via `/usr/local/sbin/thermal-mode-apply silent` and restores the previous mode
+  on lid-open, coffee-off or quit - unless the mode changed underneath us, in
+  which case the user's choice wins. Lid state comes from logind's `LidClosed`
+  property over D-Bus. Two new menu items, *Slow when lid closed* (persisted as
+  `slow_when_closed`) and *Slow now*; both are absent, along with all of the
+  behaviour, when the helper or `/etc/thermal-mode.conf` isn't there.
+- **Thermal watchdog** while slow: samples the CPU package temperature every 30 s
+  (`x86_pkg_temp` zone discovered by name, `coretemp` hwmon as fallback) and, at
+  three consecutive samples above 90 °C, releases every inhibitor so the machine
+  can suspend, with a notification explaining why. Also warns once if a discrete
+  GPU is awake (read-only) when slow mode engages.
+- Notable events are now logged (stderr / journal).
+
 ## [1.2.0] - 2026-07-26
 
 ### Added
