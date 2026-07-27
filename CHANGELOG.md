@@ -20,6 +20,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning is
   three consecutive samples above 90 °C, releases every inhibitor so the machine
   can suspend, with a notification explaining why. Also warns once if a discrete
   GPU is awake (read-only) when slow mode engages.
+- Going slow now **blanks the display** when the lid is genuinely shut, via
+  `org.gnome.ScreenSaver.SetActive`, falling back to `org.freedesktop.ScreenSaver`
+  and then to `xset dpms force off` on bare X11; the backend used is logged. The
+  idle inhibitor that keeps the machine awake is what stops the desktop blanking
+  by itself, so a closed laptop used to sit there with its panel lit. *Slow now*
+  with the lid open leaves the screen alone. If no backend will blank, slow mode
+  still engages and says so once.
 - Notable events are now logged (stderr / journal).
 
 ## [1.2.0] - 2026-07-26

@@ -30,8 +30,11 @@ thermal-mode helper (``/usr/local/sbin/thermal-mode-apply``, state in
 mode while the lid is closed and put the previous mode back when it opens. While
 engaged it also watches the CPU package temperature and, if the machine is
 clearly losing the thermal fight, releases every inhibitor so it can suspend -
-a safety valve beats a cooked mainboard. Without that helper none of this
-appears in the menu and nothing about the app's behaviour changes.
+a safety valve beats a cooked mainboard. Going slow also blanks the panel: our
+own idle inhibitor is precisely what stops the desktop from doing that on
+lid-close, so a shut laptop would otherwise sit there lighting up its own
+keyboard tray. Without that helper none of this appears in the menu and nothing
+about the app's behaviour changes.
 
 This is an independent implementation; see the README's "Prior art" note.
 """
@@ -107,6 +110,68 @@ def notify(summary, body=""):
                            Gio.SubprocessFlags.STDERR_SILENCE)
     except GLib.Error as err:
         log.debug("notify-send unavailable: %s", err)
+
+
+# Screen blanking, tried in this order. A session that answers one of these
+# does the right thing on both X11 and Wayland; `xset` is the bare-X11 backstop.
+SCREENSAVER_BACKENDS = (
+    ("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver"),
+    ("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver"),
+)
+
+# One grumble per process is plenty if no backend will blank the screen.
+_blank_warned = False
+
+
+def blank_screen():
+    """Turn the display off while the lid is shut. Returns the backend used.
+
+    Slow mode has to ask for this explicitly: the idle inhibitor that keeps the
+    machine awake is the same one that stops the desktop blanking on its own, so
+    a closed lid would otherwise keep the panel lit for nothing.
+
+    There is deliberately no matching un-blank. Every backend here wakes on user
+    activity, and opening the lid to a keypress is exactly that - an explicit
+    SetActive(false) would only race the user's own input.
+
+    Returns the backend name, or None when nothing could blank the screen. That
+    is a disappointment, never a failure: the machine is still awake, still slow.
+    """
+    global _blank_warned
+    for name, path in SCREENSAVER_BACKENDS:
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            bus.call_sync(name, path, name, "SetActive",
+                          GLib.Variant("(b)", (True,)), None,
+                          Gio.DBusCallFlags.NONE, 4000, None)
+        except GLib.Error as err:
+            log.info("%s would not blank the screen: %s", name, err)
+            continue
+        log.info("screen blanked via %s", name)
+        return name
+
+    # Bare X11 (no screensaver daemon on the bus): ask the server directly.
+    # Pointless under Wayland, where DPMS isn't X's to hand out.
+    if os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        try:
+            proc = Gio.Subprocess.new(
+                ["xset", "dpms", "force", "off"],
+                Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
+            proc.wait(None)
+        except GLib.Error as err:
+            log.info("xset unavailable: %s", err)
+        else:
+            if proc.get_successful():
+                log.info("screen blanked via xset dpms")
+                return "xset dpms"
+
+    log.warning("no backend could blank the screen")
+    if not _blank_warned:
+        _blank_warned = True
+        notify("slow-coffee: screen stayed on",
+               "Going slow worked, but nothing on this session would blank the "
+               "display, so the closed lid keeps its panel lit.")
+    return None
 
 
 def slow_mode_available(helper=THERMAL_HELPER, conf=THERMAL_CONF):
@@ -489,6 +554,20 @@ class SlowCoffee:
         else:
             self._refresh()
 
+    # --- slow mode --------------------------------------------------------
+    def _go_slow(self):
+        """Engage slow mode, and blank the panel if the lid is really shut.
+
+        The lid check is the whole point: "Slow now" is also reachable with the
+        laptop open in front of the user, and blacking out the screen they are
+        looking at would be a rude way to save a few watts.
+        """
+        if not self.slow.engage():
+            return False
+        if self.lid is not None and self.lid.closed:
+            blank_screen()
+        return True
+
     # --- menu -------------------------------------------------------------
     def _build_menu(self):
         menu = Gtk.Menu()
@@ -575,7 +654,7 @@ class SlowCoffee:
         # autostart under a closed lid) deserves the same treatment as closing it.
         if (backend and self.lid is not None and self.lid.closed
                 and self.settings["slow_when_closed"]):
-            self.slow.engage()
+            self._go_slow()
         self._refresh(backend)
 
     def deactivate(self):
@@ -646,14 +725,14 @@ class SlowCoffee:
         # Turning it off with the lid already shut un-slows right away; turning
         # it on in that state goes slow now rather than at the next lid-close.
         if self.lid is not None and self.lid.closed and self.inhibitor.active:
-            self.slow.engage() if item.get_active() else self.slow.release()
+            self._go_slow() if item.get_active() else self.slow.release()
             self._refresh()
 
     def on_toggle_slow_now(self, item):
         if self._syncing:
             return
         if item.get_active():
-            self.slow.engage()
+            self._go_slow()
         else:
             self.slow.release()
         self._refresh()
@@ -662,7 +741,7 @@ class SlowCoffee:
         """Lid closed while caffeinated: go slow. Lid opened: back to normal."""
         if closed:
             if self.inhibitor.active and self.settings["slow_when_closed"]:
-                self.slow.engage()
+                self._go_slow()
         else:
             self.slow.release()
         self._refresh()
