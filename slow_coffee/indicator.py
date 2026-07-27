@@ -43,6 +43,7 @@ import glob
 import logging
 import os
 import subprocess
+import time
 from os.path import join, dirname, abspath, isdir
 
 import gi
@@ -86,20 +87,42 @@ MODES = (("Idle only (screen stays on)", "idle"),
 # machines without the helper.
 THERMAL_HELPER = "/usr/local/sbin/thermal-mode-apply"
 THERMAL_CONF = "/etc/thermal-mode.conf"
-SLOW_THERMAL_MODE = "silent"
+
+# Modes to request when going slow, best first. "slow" is a sealed-space budget
+# (~8 W) on hosts whose helper knows it; older helpers only know "silent"
+# (~15 W), which field data showed is still too much heat for a closed bag over
+# an hour. The sudoers whitelist makes an unknown mode fail fast and cleanly,
+# so probing by trying is safe.
+SLOW_THERMAL_MODES = ("slow", "silent")
 
 # Discrete-GPU runtime power state. Read-only, purely advisory: if the dGPU is
 # awake while we go slow, cooling capacity is being spent on it and the user
 # deserves to know. slow-coffee never writes to nvidia devices.
 DGPU_RUNTIME_STATUS = "/sys/bus/pci/devices/0000:01:00.0/power/runtime_status"
 
-# Watchdog: sample the CPU package temperature this often while slow, and bail
-# out (suspend the machine) after this many consecutive samples above the limit.
+# Watchdog: sample temperatures this often while slow, and bail out (suspend
+# the machine) after this many consecutive samples above either limit.
 WATCHDOG_SECONDS = 30
 WATCHDOG_LIMIT_C = 90.0
 WATCHDOG_STRIKES = 3
 
 PKG_TEMP_TYPE = "x86_pkg_temp"
+
+# The die is the wrong thermometer for a laptop in a bag: the power cap keeps
+# it comfortably under 90 C at 8-15 W while the *chassis* soaks past
+# finger-safe with nowhere for the heat to go. Dell exposes a skin-temperature
+# zone (type "TSKN") for exactly this. Calibration on the reference machine:
+# ~58-60 C is a warm desk session, so the trip point sits above that with the
+# same strike logic; sustained 68 C skin is a machine cooking in its own
+# exhaust. Hosts without such a zone simply skip the skin check.
+SKIN_TEMP_TYPE = "TSKN"
+SKIN_LIMIT_C = 68.0
+
+# Every watchdog sample is appended here while slow is engaged (CSV: ISO time,
+# die C, skin C). The one overheat we know of left zero temperature telemetry
+# behind, which turned its post-mortem into guesswork - cheap receipts since.
+TELEMETRY_PATH = os.path.expanduser("~/.local/state/slow-coffee/thermal.csv")
+TELEMETRY_MAX_BYTES = 1 << 20   # rotate to .1 past ~1 MB (months of samples)
 
 
 def notify(summary, body=""):
@@ -201,21 +224,27 @@ def read_thermal_mode(conf=THERMAL_CONF):
     return None
 
 
-def find_pkg_temp_path(sysfs="/sys"):
-    """Locate a CPU package temperature file, by *name* rather than by number.
+def find_zone_temp_path(zone_type, sysfs="/sys"):
+    """Locate a thermal zone's temp file by *type name* rather than by number.
 
-    Zone numbering is firmware order and shuffles between boots and machines,
-    so scan for the zone whose ``type`` is ``x86_pkg_temp``; failing that, fall
-    back to the coretemp hwmon's ``temp1_input`` (the package sensor there too).
+    Zone numbering is firmware order and shuffles between boots and machines.
     Returns a path in millidegrees Celsius, or None.
     """
     for type_path in sorted(glob.glob(join(sysfs, "class/thermal/thermal_zone*/type"))):
         try:
             with open(type_path) as f:
-                if f.read().strip() == PKG_TEMP_TYPE:
+                if f.read().strip() == zone_type:
                     return join(dirname(type_path), "temp")
         except OSError:
             continue
+    return None
+
+
+def find_pkg_temp_path(sysfs="/sys"):
+    """CPU package temperature: the x86_pkg_temp zone, else coretemp hwmon."""
+    path = find_zone_temp_path(PKG_TEMP_TYPE, sysfs)
+    if path:
+        return path
     for name_path in sorted(glob.glob(join(sysfs, "class/hwmon/hwmon*/name"))):
         try:
             with open(name_path) as f:
@@ -233,6 +262,20 @@ def read_temp_c(path):
             return int(f.read().strip()) / 1000.0
     except (OSError, ValueError):
         return None
+
+
+def log_telemetry(die_c, skin_c, path=TELEMETRY_PATH):
+    """Append one temperature sample; best-effort, never raises."""
+    fmt = lambda v: "" if v is None else "%.1f" % v
+    try:
+        os.makedirs(dirname(path), exist_ok=True)
+        if os.path.exists(path) and os.path.getsize(path) > TELEMETRY_MAX_BYTES:
+            os.replace(path, path + ".1")
+        with open(path, "a") as f:
+            f.write("%s,%s,%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                    fmt(die_c), fmt(skin_c)))
+    except OSError as err:
+        log.debug("telemetry write failed: %s", err)
 
 
 def find_icons_dir():
@@ -373,10 +416,17 @@ class LidWatcher:
     PATH = "/org/freedesktop/login1"
     IFACE = "org.freedesktop.login1.Manager"
 
+    # Some lid switches bounce: the reference machine's kernel flags its lid
+    # device as "not compliant to SW_LID" and logind has recorded phantom
+    # close/open pairs seconds apart. Believe a transition only once it has
+    # held this long.
+    DEBOUNCE_SECONDS = 2
+
     def __init__(self, on_change):
         self.on_change = on_change      # called with True (closed) / False (open)
         self.closed = False
         self.sub_id = None
+        self._settle_id = None
         try:
             self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         except GLib.Error as err:
@@ -409,15 +459,35 @@ class LidWatcher:
             closed = bool(self._read_lid())
         else:
             return
+        if closed == self.closed:
+            return
+        # Restart the settle clock on every flap; only a state that survives it
+        # is reported. A real close still acts within DEBOUNCE_SECONDS.
+        if self._settle_id is not None:
+            GLib.source_remove(self._settle_id)
+        self._settle_id = GLib.timeout_add_seconds(self.DEBOUNCE_SECONDS,
+                                                   self._settle)
+
+    def _settle(self):
+        self._settle_id = None
+        closed = bool(self._read_lid())
         if closed != self.closed:
             self.closed = closed
-            log.info("lid %s", "closed" if closed else "opened")
+            log.info("lid %s (held %ds)", "closed" if closed else "opened",
+                     self.DEBOUNCE_SECONDS)
             self.on_change(closed)
+        else:
+            log.info("lid bounce ignored (state back to %s)",
+                     "closed" if closed else "open")
+        return False
 
     def stop(self):
         if self.sub_id is not None:
             self.bus.signal_unsubscribe(self.sub_id)
             self.sub_id = None
+        if self._settle_id is not None:
+            GLib.source_remove(self._settle_id)
+            self._settle_id = None
 
 
 class SlowMode:
@@ -441,6 +511,7 @@ class SlowMode:
         self.available = slow_mode_available(helper, conf)
         self.engaged = False
         self.previous = None        # mode to restore, None = nothing to restore
+        self.mode = None            # the slow mode we actually got
         self.watchdog_id = None
         self.strikes = 0
 
@@ -451,16 +522,23 @@ class SlowMode:
         if current is None:
             log.warning("no current thermal mode to snapshot; staying as-is")
             return False
-        if current == SLOW_THERMAL_MODE:
-            self.previous = None    # already quiet: leave it that way on release
-        elif self._apply(SLOW_THERMAL_MODE):
-            self.previous = current
-        else:
+        self.mode = None
+        for mode in SLOW_THERMAL_MODES:
+            if current == mode:
+                self.mode = mode
+                self.previous = None    # already quiet: leave it be on release
+                break
+            if self._apply(mode):
+                self.mode = mode
+                self.previous = current
+                break
+        if self.mode is None:
             notify("slow-coffee: could not go slow",
-                   "The thermal helper refused. Staying in %s." % current)
+                   "The thermal helper refused every slow mode. "
+                   "Staying in %s." % current)
             return False
         self.engaged = True
-        log.info("slow mode engaged (was %s)", current)
+        log.info("slow mode engaged: %s (was %s)", self.mode, current)
         self._warn_if_dgpu_awake()
         self.strikes = 0
         self.watchdog_id = GLib.timeout_add_seconds(WATCHDOG_SECONDS, self._sample)
@@ -474,10 +552,11 @@ class SlowMode:
             GLib.source_remove(self.watchdog_id)
             self.watchdog_id = None
         previous, self.previous = self.previous, None
+        mode, self.mode = self.mode, None
         if previous is None:
             return
         now = read_thermal_mode(self.conf)
-        if now != SLOW_THERMAL_MODE:
+        if now != mode:
             log.info("thermal mode is %s, not ours - leaving it alone", now)
             return
         if self._apply(previous):
@@ -514,23 +593,34 @@ class SlowMode:
     def _sample(self):
         if not self.engaged:
             return False
-        path = find_pkg_temp_path()
-        temp = read_temp_c(path) if path else None
-        if temp is None:
-            return True             # no sensor: nothing to judge, keep going
-        if temp <= WATCHDOG_LIMIT_C:
+        die_path = find_pkg_temp_path()
+        skin_path = find_zone_temp_path(SKIN_TEMP_TYPE)
+        die = read_temp_c(die_path) if die_path else None
+        skin = read_temp_c(skin_path) if skin_path else None
+        log_telemetry(die, skin)
+        if die is None and skin is None:
+            return True             # no sensors: nothing to judge, keep going
+
+        # Two thermometers, one verdict: the die catches a runaway CPU, the
+        # skin catches slow heat-soak in a sealed bag - the failure mode a
+        # power-capped die never reports.
+        over = None
+        if die is not None and die > WATCHDOG_LIMIT_C:
+            over = "CPU die at %.0f C (limit %.0f)" % (die, WATCHDOG_LIMIT_C)
+        elif skin is not None and skin > SKIN_LIMIT_C:
+            over = "chassis skin at %.0f C (limit %.0f)" % (skin, SKIN_LIMIT_C)
+        if over is None:
             self.strikes = 0
             return True
         self.strikes += 1
-        log.warning("package temp %.1f C over %.0f C (%d/%d)",
-                    temp, WATCHDOG_LIMIT_C, self.strikes, WATCHDOG_STRIKES)
+        log.warning("%s - strike %d/%d", over, self.strikes, WATCHDOG_STRIKES)
         if self.strikes < WATCHDOG_STRIKES:
             return True
         self.watchdog_id = None
-        notify("slow-coffee: letting the machine sleep",
-               "CPU package hit %.0f C three times in a row, so the coffee is "
-               "off and inhibitors are released. Cooling beats staying awake."
-               % temp)
+        notify("slow-coffee: overheating - forcing sleep",
+               "%s for %d samples in a row. Coffee is off and the machine is "
+               "suspending. Cooling beats staying awake." %
+               (over, WATCHDOG_STRIKES))
         if self.on_overheat is not None:
             self.on_overheat()
         return False
@@ -756,9 +846,26 @@ class SlowCoffee:
         self._refresh()
 
     def on_overheat(self):
-        """Watchdog safety valve: drop the coffee so the machine can suspend."""
-        log.warning("thermal watchdog tripped - releasing inhibitors")
+        """Watchdog safety valve: drop the coffee and FORCE the suspend.
+
+        Releasing our own inhibitors is not enough: any other block inhibitor
+        on the system (another caffeine app, a stray systemd-inhibit) would
+        veto a polite suspend and the machine would keep cooking - which is
+        how the one real overheat played out. ``systemctl suspend -i``
+        ignores inhibitors outright; when the stakes are a cooked mainboard,
+        rudeness is correct.
+        """
+        log.warning("thermal watchdog tripped - releasing inhibitors, forcing suspend")
         self.deactivate()
+        try:
+            Gio.Subprocess.new(["systemctl", "suspend", "-i"],
+                               Gio.SubprocessFlags.STDOUT_SILENCE |
+                               Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error as err:
+            log.error("forced suspend failed: %s - machine stays hot!", err)
+            notify("slow-coffee: SUSPEND FAILED",
+                   "The thermal watchdog could not suspend the machine. "
+                   "It is overheating: intervene now.")
 
     def _selected_minutes(self):
         for item, (_label, mins) in zip(self.duration_items, DURATIONS):

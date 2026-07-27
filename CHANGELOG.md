@@ -6,6 +6,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning is
 
 ## [Unreleased]
 
+### Changed — lessons from a field overheat (2026-07-27)
+A lid-shut, slow-mode laptop still overheated in a backpack: the power-capped
+CPU die never neared 90 °C, but half an hour of steady 15 W+ into a sealed bag
+soaked the chassis past finger-safe, and the die-only watchdog stayed silent
+the whole time. Everything below exists because of that ride.
+
+- **Skin-temperature watchdog**: alongside the 90 °C die check, slow mode now
+  watches the chassis-skin thermal zone (type `TSKN`, where the host has one)
+  and trips at three consecutive samples above 68 °C. The die catches a runaway
+  CPU; the skin catches slow heat-soak the die never reports.
+- **The safety valve now forces the suspend** with `systemctl suspend -i`
+  after releasing its own inhibitors: any other block inhibitor on the system
+  (another caffeine app, a stray `systemd-inhibit`) would veto a polite
+  suspend and keep the machine cooking.
+- **Thermal telemetry**: while slow is engaged, every watchdog sample is
+  appended to `~/.local/state/slow-coffee/thermal.csv` (ISO time, die °C,
+  skin °C; rotates past ~1 MB) so the next post-mortem has receipts.
+- **Deeper slow mode where available**: slow mode now asks the helper for a
+  `slow` mode first (a sealed-space power budget) and falls back to `silent`
+  on hosts that don't know it.
+- **Lid debounce** (2 s): some lid switches bounce (kernel: "not compliant to
+  SW_LID"); a transition is acted on only once it has held.
+- **Autostart uses an absolute Exec path**: systemd's xdg-autostart-generator
+  resolves `Exec=` before `~/.local/bin` is on PATH, so a bare name from a
+  pip --user install logged "Exec binary does not exist" at every boot.
+
 ### Added
 - **Slow mode** (opt-out, and only where the host supports it): while
   caffeinated, closing the lid switches the machine to its quietest thermal mode

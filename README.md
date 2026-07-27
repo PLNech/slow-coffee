@@ -139,16 +139,26 @@ non-problem:
   menu items never appear and slow-coffee behaves exactly as before - nothing to
   opt out of.
 - **On lid close** (while caffeinated, with *Slow when lid closed* on) it
-  snapshots the current mode and asks the helper for `silent`. **On lid open** -
-  or when the coffee goes off, or on quit - it puts the snapshot back. If you
-  changed modes yourself in the meantime, your choice is left alone.
+  snapshots the current mode and asks the helper for `slow` (a sealed-space
+  power budget), falling back to `silent` where the helper doesn't know it.
+  **On lid open** - or when the coffee goes off, or on quit - it puts the
+  snapshot back. If you changed modes yourself in the meantime, your choice is
+  left alone.
 - Lid state comes from logind's `LidClosed` property over D-Bus (a signal
-  subscription, not a poll).
-- **Thermal watchdog.** While slow, the CPU package temperature is sampled every
-  30 s (from the `x86_pkg_temp` thermal zone, found by name - zone numbering is
-  firmware order - or the `coretemp` hwmon). Three consecutive samples above
-  90 °C and slow-coffee releases *every* inhibitor and notifies you: letting the
-  machine suspend beats cooking it. The app stays running, decaf.
+  subscription, not a poll), debounced by 2 s - some lid switches bounce.
+- **Thermal watchdog, two thermometers.** While slow, temperatures are sampled
+  every 30 s: the CPU package (`x86_pkg_temp` zone, found by name - zone
+  numbering is firmware order - or the `coretemp` hwmon) against a 90 °C limit,
+  and the chassis-skin zone (type `TSKN`, where the host has one) against
+  68 °C. The die catches a runaway CPU; the skin catches slow heat-soak in a
+  closed bag, which a power-capped die never reports. Three consecutive strikes
+  on either and slow-coffee releases every inhibitor, notifies you, and forces
+  the suspend with `systemctl suspend -i` - polite suspends can be vetoed by
+  other apps' inhibitors, and letting the machine sleep beats cooking it. The
+  app stays running, decaf.
+- **Telemetry.** Every watchdog sample lands in
+  `~/.local/state/slow-coffee/thermal.csv` (ISO time, die °C, skin °C), so if
+  something ever runs hot you have the receipts.
 - If a discrete GPU is awake (`runtime_status` not `suspended`) when slow mode
   engages, you get a heads-up notification. slow-coffee only ever *reads* that
   file.

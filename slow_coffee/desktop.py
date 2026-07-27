@@ -33,8 +33,20 @@ def _desktop_body(exec_cmd="slow-coffee", autostart=False):
     return "\n".join(lines) + "\n"
 
 
+def _launcher():
+    """Absolute path to the launcher when we can find one, else the bare name.
+
+    systemd's xdg-autostart-generator resolves Exec= before the login shell has
+    added ~/.local/bin to PATH, so a bare name from a pip --user install logs
+    "Exec binary 'slow-coffee' does not exist" at every boot and may not start
+    at all. An absolute path sidesteps the PATH question entirely.
+    """
+    return shutil.which("slow-coffee") or "slow-coffee"
+
+
 def _autostart_exec(start_active):
-    return "slow-coffee" if start_active else "slow-coffee --start-inactive"
+    cmd = _launcher()
+    return cmd if start_active else cmd + " --start-inactive"
 
 
 def _xdg(*parts):
