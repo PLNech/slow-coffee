@@ -1,10 +1,17 @@
-"""Tiny persisted preferences for the tray's boot toggles.
+"""Tiny persisted preferences for the tray's toggles.
 
-Only one thing needs storing: ``coffee_at_boot`` - whether an autostart launch
-boots caffeinated (cup full) or decaf (``--start-inactive``). The *other* toggle,
-"start at boot", has a better source of truth than a settings key: the presence
-of the autostart ``.desktop`` file itself (see ``desktop.autostart_enabled``), so
-it's never stored here and never drifts from reality.
+Two things need storing:
+
+- ``coffee_at_boot`` - whether an autostart launch boots caffeinated (cup full)
+  or decaf (``--start-inactive``).
+- ``slow_when_closed`` - whether closing the lid while caffeinated drops the
+  machine into its quietest thermal mode (see the indicator's slow mode). Only
+  consulted where slow mode is available at all; harmless elsewhere.
+
+The "start at boot" toggle has a better source of truth than a settings key: the
+presence of the autostart ``.desktop`` file itself (see
+``desktop.autostart_enabled``), so it's never stored here and never drifts from
+reality.
 
 Stored as JSON under ``$XDG_CONFIG_HOME`` (``~/.config/slow-coffee/settings.json``).
 Written atomically. Missing/corrupt file falls back to the defaults.
@@ -14,7 +21,7 @@ import json
 import os
 from os.path import join, dirname, exists
 
-DEFAULTS = {"coffee_at_boot": True}
+DEFAULTS = {"coffee_at_boot": True, "slow_when_closed": True}
 
 
 def path():
