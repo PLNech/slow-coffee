@@ -38,6 +38,8 @@ caffeinated and stays that way. One click (or a timer) to stop.
   closing the lid while caffeinated drops the CPU to its quietest mode (and puts
   the old one back on open), with a temperature watchdog that lets the machine
   sleep if it starts cooking anyway. Invisible everywhere else.
+- **Quiet while caffeinated, opt-in.** Same helper, coupled to the coffee rather
+  than the lid: stay awake *and* stay silent for as long as the cup is full.
 - **Self-contained.** Bundles its own icons; no theme or extra data package.
 
 ## Install
@@ -93,6 +95,7 @@ cup appears in the tray, already caffeinated. Click it for the menu:
 | Indefinitely / 30 min / 1 h / 2 h | Pick a duration; it auto-stops when time is up |
 | Start at boot | Add/remove the autostart entry - launch slow-coffee at login |
 | Coffee at boot | When autostarted, boot caffeinated (off = boot decaf) |
+| Quiet while caffeinated | *(only where available)* Off by default; keep the machine in its quiet thermal mode for as long as the coffee is on |
 | Slow when lid closed | *(only where available)* Go slow automatically on lid-close |
 | Slow now | *(only where available)* Engage/release slow mode by hand |
 | About / Quit | The usual |
@@ -143,9 +146,21 @@ non-problem:
 
 - **Requires** an executable `/usr/local/sbin/thermal-mode-apply <mode>`
   (callable via `sudo -n`, i.e. whitelisted in sudoers) and a readable
-  `/etc/thermal-mode.conf` holding `MODE=<mode>`. If either is missing, the two
+  `/etc/thermal-mode.conf` holding `MODE=<mode>`. If either is missing, the three
   menu items never appear and slow-coffee behaves exactly as before - nothing to
-  opt out of.
+  opt out of. The helper is a *separate* tool, not shipped here: the author's
+  lives in a private SRE repo under `thermal/`, where it steers CPU watts and, on
+  Dell hardware, optionally pushes a BIOS thermal profile. Anything that accepts a
+  mode name and records it in that file will do.
+- **Quiet while caffeinated** (*off* by default) couples the thermal mode to the
+  coffee instead of the lid: some rooms make fan noise the thing you can't
+  afford - a recording, a talk, a sleeping flat - so while the coffee is on the
+  machine sits in `silent`, and the mode you had comes back when it goes off.
+  Trading watts for silence is a real choice, so this one waits to be asked.
+  It layers *under* slow mode rather than fighting it: quiet remembers the mode
+  you picked, slow remembers the one quiet left, and each only ever restores what
+  it found - so a lid-close while quiet still deepens to `slow`, and opening it
+  returns to `silent` until the coffee stops.
 - **On lid close** (while caffeinated, with *Slow when lid closed* on) it
   snapshots the current mode and asks the helper for `slow` (a sealed-space
   power budget), falling back to `silent` where the helper doesn't know it.

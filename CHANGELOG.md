@@ -43,6 +43,23 @@ the whole time. Everything below exists because of that ride.
   pip --user install logged "Exec binary does not exist" at every boot.
 
 ### Added
+- **Quiet mode** (*opt-in*, off by default, and only where the host supports it):
+  a *Quiet while caffeinated* menu item couples the thermal mode to the **coffee**
+  rather than the lid. With it on, the coffee going on also asks the helper for
+  `silent` - the mode that means "fan noise is unaffordable in this room right
+  now" - and the coffee going off puts the previous mode back. Restores only if
+  the persisted mode is *still* `silent`, so a mode you picked yourself in the
+  meantime is left alone; a machine already quiet is untouched in both directions.
+  Persisted as `quiet_with_coffee`. It layers *under* slow mode instead of
+  fighting it (quiet remembers the mode you chose, slow remembers the one quiet
+  left, and each restores only what it found), with one guard: toggling the
+  coupling on while slow mode is already engaged is deliberately ignored, since
+  applying `silent` over `slow` would both un-deepen a laptop in a closed bag and
+  strand slow's snapshot, parking the machine in `slow` after the coffee stopped.
+  Unlike slow mode's helper call, this one is bounded (15 s) and stdin-less, so a
+  host whose sudoers doesn't whitelist the helper fails immediately instead of
+  waiting for a password no tray icon can type; every thermal failure is logged
+  and swallowed, because a courtesy must never take the coffee toggle down with it.
 - **Slow mode** (opt-out, and only where the host supports it): while
   caffeinated, closing the lid switches the machine to its quietest thermal mode
   via `/usr/local/sbin/thermal-mode-apply silent` and restores the previous mode

@@ -40,6 +40,13 @@ lid-close, so a shut laptop would otherwise sit there lighting up its own
 keyboard tray. Without that helper none of this appears in the menu and nothing
 about the app's behaviour changes.
 
+The same helper powers a fifth, opt-in trick: **quiet mode**, which couples the
+thermal mode to the *coffee* rather than to the lid. Some rooms make fan noise
+the thing you cannot afford - a recording, a sleeping flat, a talk - so with it
+on, coffee-on also means "and keep the machine quiet", and coffee-off puts the
+previous mode back. It is off by default, and the two tricks layer rather than
+fight: quiet remembers what the user chose, slow remembers what quiet left.
+
 This is an independent implementation; see the README's "Prior art" note.
 """
 
@@ -98,6 +105,23 @@ THERMAL_CONF = "/etc/thermal-mode.conf"
 # an hour. The sudoers whitelist makes an unknown mode fail fast and cleanly,
 # so probing by trying is safe.
 SLOW_THERMAL_MODES = ("slow", "silent")
+
+# The mode quiet mode asks for. "silent" is the host's contract for "noise is
+# toxic in this room right now" - not the deepest power cut available (that's
+# "slow"), but the one that buys silence while the machine stays usable, which
+# is the whole point of coupling it to a coffee you are sitting in front of.
+QUIET_THERMAL_MODE = "silent"
+
+# Upper bound on one helper round-trip. Quiet mode runs on the coffee toggle -
+# a path the user is actively watching - so a wedged or password-prompting
+# helper has to cost a moment and then be forgotten, never a frozen tray.
+QUIET_TIMEOUT_SECONDS = 15
+
+# One grumble per process, like the screen-blank warning: quiet mode rides the
+# coffee toggle, so on a host where the helper always refuses (no sudoers rule,
+# say) a notification per attempt would be a popup every time the cup is
+# clicked. Say it once, log the rest.
+_quiet_warned = False
 
 # Discrete-GPU runtime power state. Read-only, purely advisory: if the dGPU is
 # awake while we go slow, cooling capacity is being spent on it and the user
@@ -641,6 +665,105 @@ class SlowMode:
         return False
 
 
+class QuietMode:
+    """Couples the machine's thermal mode to the coffee: awake means quiet.
+
+    Opt-in and off by default. Engaging snapshots the persisted mode and asks the
+    host helper for ``silent``; releasing puts the snapshot back, but only if the
+    persisted mode is *still* ``silent`` - if the user picked something else in
+    the meantime, theirs wins and we keep our hands off. A machine already quiet
+    when the coffee starts is left alone in both directions: nothing was changed,
+    so there is nothing to restore.
+
+    Deliberately narrower than :class:`SlowMode`, which it shares the helper and
+    the snapshot discipline with: one fixed mode, no watchdog, no blanking. A
+    laptop cooking in a closed bag is a safety problem; a laptop whirring in a
+    quiet room is a courtesy problem, and the courtesy must never grow teeth.
+
+    The two layer cleanly *because* both restore what they found: quiet takes the
+    user's mode down to silent, slow takes silent down to slow on lid-close and
+    hands silent back on lid-open, and quiet finally hands the user's own mode
+    back when the coffee stops. Neither needs to know the other exists.
+
+    Every failure here is a disappointment, never an error: the coffee is what
+    the user asked for, and no thermal sulk may take it down.
+    """
+
+    def __init__(self, helper=THERMAL_HELPER, conf=THERMAL_CONF):
+        self.helper = helper
+        self.conf = conf
+        self.available = slow_mode_available(helper, conf)
+        self.engaged = False
+        self.previous = None        # mode to restore, None = nothing to restore
+
+    def engage(self):
+        """Go quiet, remembering what to put back. Returns whether we are quiet."""
+        if not self.available or self.engaged:
+            return self.engaged
+        current = read_thermal_mode(self.conf)
+        if current is None:
+            log.warning("no current thermal mode to snapshot; staying as-is")
+            return False
+        global _quiet_warned
+        if current == QUIET_THERMAL_MODE:
+            self.previous = None    # already quiet: leave it be on release
+        elif self._apply(QUIET_THERMAL_MODE):
+            self.previous = current
+        else:
+            if not _quiet_warned:
+                _quiet_warned = True
+                notify("slow-coffee: could not go quiet",
+                       "The thermal helper would not switch to %s. Staying in "
+                       "%s, and the coffee is unaffected." % (QUIET_THERMAL_MODE,
+                                                              current))
+            return False
+        self.engaged = True
+        log.info("quiet mode engaged: %s (was %s)", QUIET_THERMAL_MODE, current)
+        return True
+
+    def release(self):
+        """Hand the pre-coffee mode back, unless the user has moved it since."""
+        if not self.engaged:
+            return
+        self.engaged = False
+        previous, self.previous = self.previous, None
+        if previous is None:
+            return
+        now = read_thermal_mode(self.conf)
+        if now != QUIET_THERMAL_MODE:
+            log.info("thermal mode is %s, not ours - leaving it alone", now)
+            return
+        if self._apply(previous):
+            log.info("quiet mode released, restored %s", previous)
+
+    def _apply(self, mode):
+        """Run the host helper. No shell, exact argument, non-interactive sudo.
+
+        Bounded and deliberately stdin-less: on a host whose sudoers does not
+        whitelist the helper, ``sudo`` would sit waiting for a password that no
+        tray icon can type, and the GTK loop would hang with it. With no stdin it
+        fails immediately, and the timeout catches whatever else might wedge.
+        """
+        try:
+            subprocess.run(["sudo", "-n", self.helper, mode],
+                           stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE,
+                           timeout=QUIET_TIMEOUT_SECONDS, check=True)
+        except subprocess.CalledProcessError as err:
+            detail = (err.stderr or b"").decode("utf-8", "replace").strip()
+            log.warning("%s %s failed: %s", self.helper, mode, detail)
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning("%s %s timed out after %ds",
+                        self.helper, mode, QUIET_TIMEOUT_SECONDS)
+            return False
+        except OSError as err:
+            log.warning("cannot run %s: %s", self.helper, err)
+            return False
+        return True
+
+
 class SlowCoffee:
     def __init__(self, start_active=True, minutes=0):
         self.inhibitor = Inhibitor()
@@ -655,6 +778,8 @@ class SlowCoffee:
         # Slow mode and its lid watcher only exist where the host helper does.
         self.slow = SlowMode(on_overheat=self.on_overheat)
         self.lid = LidWatcher(self.on_lid) if self.slow.available else None
+        # Quiet mode rides the same helper, so it is available on the same hosts.
+        self.quiet = QuietMode()
 
         self.ind = AppIndicator3.Indicator.new_with_path(
             APP_ID, "slow-coffee-empty",
@@ -726,9 +851,16 @@ class SlowCoffee:
         self.coffee_boot_item.connect("toggled", self.on_toggle_coffee_boot)
         menu.append(self.coffee_boot_item)
 
-        self.slow_closed_item = self.slow_now_item = None
+        self.quiet_item = self.slow_closed_item = self.slow_now_item = None
         if self.slow.available:
             menu.append(Gtk.SeparatorMenuItem())
+
+            # Shallowest thermal coupling first: quiet follows the coffee, slow
+            # follows the lid, "Slow now" is the by-hand override.
+            self.quiet_item = Gtk.CheckMenuItem(label="Quiet while caffeinated")
+            self.quiet_item.set_active(self.settings["quiet_with_coffee"])
+            self.quiet_item.connect("toggled", self.on_toggle_quiet)
+            menu.append(self.quiet_item)
 
             self.slow_closed_item = Gtk.CheckMenuItem(label="Slow when lid closed")
             self.slow_closed_item.set_active(self.settings["slow_when_closed"])
@@ -764,6 +896,13 @@ class SlowCoffee:
         self._clear_timer()
         if minutes > 0:
             self.timer_id = GLib.timeout_add_seconds(minutes * 60, self._expire)
+        # Coffee on means "keep this machine up"; coupled, it also means "and keep
+        # it quiet while you're at it". Engaged before any slow-mode call below so
+        # the snapshots nest in the right order: quiet remembers the user's mode,
+        # slow then remembers quiet's. (No backend means the coffee is not
+        # actually on, so there is nothing to couple to.)
+        if backend and self.settings["quiet_with_coffee"]:
+            self.quiet.engage()
         # Caffeinating a machine whose lid is *already* shut (docked, or an
         # autostart under a closed lid) deserves the same treatment as closing it.
         if (backend and self.lid is not None and self.lid.closed
@@ -775,6 +914,9 @@ class SlowCoffee:
         self._clear_timer()
         self.inhibitor.release()
         self.slow.release()         # no coffee, no reason to hold the machine slow
+        # Unwound outermost-last: slow hands "silent" back first, then quiet hands
+        # the user's own mode back on top of it.
+        self.quiet.release()
         self._refresh()
 
     def _expire(self):
@@ -791,9 +933,16 @@ class SlowCoffee:
             "caffeinated" if on else "decaf")
         self.toggle_item.set_label("Deactivate" if on else "Activate")
         via = " via %s (%s)" % (backend, self.inhibitor.mode) if backend else ""
-        slow = " - slow" if self.slow.engaged else ""
+        # Slow sits on top of quiet, so name only the deeper of the two - the cup
+        # does not lie, and neither should its tooltip.
+        if self.slow.engaged:
+            thermal = " - slow"
+        elif self.quiet.engaged:
+            thermal = " - quiet"
+        else:
+            thermal = ""
         self.ind.set_title("slow-coffee: %s%s%s"
-                           % ("awake" if on else "off", via, slow))
+                           % ("awake" if on else "off", via, thermal))
         if self.slow_now_item is not None:
             # Reflect reality without re-entering the toggled handler.
             self._syncing = True
@@ -832,6 +981,20 @@ class SlowCoffee:
         # If we already start at boot, rewrite the entry so the next login obeys.
         if desktop.autostart_enabled():
             desktop.set_autostart(True, start_active=item.get_active())
+
+    def on_toggle_quiet(self, item):
+        self.settings["quiet_with_coffee"] = item.get_active()
+        settings.save(self.settings)
+        # Same immediacy as "Slow when lid closed": answered now, not at the next
+        # coffee. Skipped while slow mode is engaged, though, because slow sits
+        # *below* quiet: applying silent over slow would both un-deepen a laptop
+        # in a closed bag and leave slow's snapshot stranded (it would see a mode
+        # that is not its own and let go, so lid-open would restore nothing and
+        # the machine would end up parked in slow with the coffee off). Coffee-off
+        # still unwinds the layer properly either way.
+        if self.inhibitor.active and not self.slow.engaged:
+            self.quiet.engage() if item.get_active() else self.quiet.release()
+            self._refresh()
 
     def on_toggle_slow_when_closed(self, item):
         self.settings["slow_when_closed"] = item.get_active()

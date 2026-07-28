@@ -1,12 +1,16 @@
 """Tiny persisted preferences for the tray's toggles.
 
-Two things need storing:
+Three things need storing:
 
 - ``coffee_at_boot`` - whether an autostart launch boots caffeinated (cup full)
   or decaf (``--start-inactive``).
 - ``slow_when_closed`` - whether closing the lid while caffeinated drops the
   machine into its quietest thermal mode (see the indicator's slow mode). Only
   consulted where slow mode is available at all; harmless elsewhere.
+- ``quiet_with_coffee`` - whether the coffee going on also asks the host for its
+  quiet thermal mode, restoring the previous one when the coffee goes off (see
+  the indicator's quiet mode). Off by default: trading watts for silence is a
+  real choice, so it waits to be asked. Same availability gate as slow mode.
 
 The "start at boot" toggle has a better source of truth than a settings key: the
 presence of the autostart ``.desktop`` file itself (see
@@ -21,7 +25,8 @@ import json
 import os
 from os.path import join, dirname, exists
 
-DEFAULTS = {"coffee_at_boot": True, "slow_when_closed": True}
+DEFAULTS = {"coffee_at_boot": True, "slow_when_closed": True,
+            "quiet_with_coffee": False}
 
 
 def path():
