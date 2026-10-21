@@ -114,7 +114,7 @@ def install(autostart=False, start_active=True):
     desktop_dst = _xdg("applications", "slow-coffee.desktop")
     os.makedirs(dirname(desktop_dst), exist_ok=True)
     with open(desktop_dst, "w") as f:
-        f.write(_desktop_body())
+        f.write(_desktop_body(exec_cmd=_launcher()))
     written.append(desktop_dst)
 
     if autostart:

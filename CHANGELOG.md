@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versioning is
 ## [Unreleased]
 
 ### Fixed
+- **The applications-menu launcher now carries an absolute `Exec` path.** A
+  `pip --user` install puts `slow-coffee` in `~/.local/bin`, which is not on the
+  PATH GNOME Shell inherits, so the menu entry was listed but launched nothing.
+  The autostart entry already had this fix; `--install-desktop` now applies it
+  to the menu entry too.
 - **"Sleep only"/"Both" now really survive a closed lid on GNOME.** logind
   ships with `LidSwitchIgnoreInhibited=yes`, so on lid-close it ignores every
   sleep inhibitor that does not name `handle-lid-switch` — including GNOME
