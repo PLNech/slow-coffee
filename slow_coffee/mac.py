@@ -106,6 +106,20 @@ def _admin(shell_script):
     return proc.returncode == 0
 
 
+PMSET = "/usr/bin/pmset"
+
+
+def watcher_command(pid, flag, pmset=PMSET, interval=3):
+    """Shell snippet for the root dead-man's switch: restore sleep when ``pid``
+    dies or ``flag`` disappears. Backgrounded, so it outlives the admin prompt."""
+    return (
+        "nohup /bin/sh -c 'while kill -0 %(pid)d 2>/dev/null && [ -e \"%(flag)s\" ]; "
+        "do sleep %(interval)s; done; %(pmset)s -a disablesleep 0' "
+        ">/dev/null 2>&1 &"
+    ) % {"pid": pid, "flag": flag.replace("'", ""), "pmset": pmset,
+         "interval": interval}
+
+
 def enable_lid_mode():
     """Turn ``pmset disablesleep`` on, with a root watcher that turns it off again.
 
@@ -117,12 +131,8 @@ def enable_lid_mode():
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(LID_FLAG, "w") as f:
         f.write(str(os.getpid()))
-    script = (
-        "/usr/bin/pmset -a disablesleep 1; "
-        "nohup /bin/sh -c 'while kill -0 %(pid)d 2>/dev/null && [ -e \"%(flag)s\" ]; "
-        "do sleep 3; done; /usr/bin/pmset -a disablesleep 0' "
-        ">/dev/null 2>&1 &"
-    ) % {"pid": os.getpid(), "flag": LID_FLAG.replace("'", "")}
+    script = "%s -a disablesleep 1; %s" % (
+        PMSET, watcher_command(os.getpid(), LID_FLAG))
     ok = _admin(script)
     if not ok:
         _remove_flag()
