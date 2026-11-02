@@ -18,13 +18,17 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Topic :: Desktop Environment",
     "Topic :: Utilities",
 ]
 # PyGObject + AyatanaAppIndicator3 GIR come from the system (see README); pip can
 # build PyGObject too if the GObject-introspection dev headers are present.
-dependencies = ["PyGObject>=3.42"]
+dependencies = [
+    "PyGObject>=3.42; sys_platform == 'linux'",
+    "rumps>=0.4.0; sys_platform == 'darwin'",
+]
 
 [project.urls]
 Homepage = "https://github.com/PLNech/slow-coffee"

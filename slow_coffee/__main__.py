@@ -9,6 +9,11 @@ from . import __version__
 
 
 def _run_indicator(start_active, minutes):
+    if sys.platform == "darwin":
+        from . import mac
+        mac.run(start_active=start_active, minutes=minutes)
+        return
+
     # Import the indicator first: it pins gi.require_version("Gtk", "3.0") before
     # anything pulls in gi.repository.Gtk (which would otherwise default to 4.0).
     # Kept lazy so --install-desktop / --version work without a display.
@@ -50,6 +55,23 @@ def main(argv=None):
     p.add_argument("--uninstall-desktop", action="store_true",
                    help="remove the launcher/icon/autostart entries")
     args = p.parse_args(argv)
+
+    if args.uninstall_desktop and sys.platform == "darwin":
+        from . import mac
+        removed = mac.uninstall_launch_agent()
+        print("Removed:" if removed else "Nothing to remove.")
+        for path in removed:
+            print("  -", path)
+        return 0
+
+    if args.install_desktop and sys.platform == "darwin":
+        # macOS has no app-menu .desktop; the login item IS the install. It also
+        # starts the menu-bar app right away, so the cup appears without a re-login.
+        from . import mac
+        for path in mac.install_launch_agent(start_active=not args.start_inactive):
+            print("  +", path)
+        print("\nslow-coffee is running in your menu bar and will start at login.")
+        return 0
 
     if args.uninstall_desktop:
         from . import desktop
