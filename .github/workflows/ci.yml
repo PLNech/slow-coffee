@@ -61,3 +61,27 @@ jobs:
         with:
           name: deb
           path: deb/*.deb
+
+  macos:
+    name: macOS tests + CLI smoke
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install .
+      - run: slow-coffee --version
+      - run: slow-coffee --help
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Menu-bar app boots and holds a sleep assertion
+        run: |
+          python -m slow_coffee &
+          APP=$!
+          sleep 5
+          kill -0 $APP
+          pmset -g assertions | grep -q caffeinate
+          kill $APP
+          sleep 2
+          ! pgrep -x caffeinate
